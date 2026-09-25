@@ -236,10 +236,10 @@ def download(url, path):
             os.remove(path + ".part")
 
 
-def download_many(pairs, progress=None):
+def download_many(pairs, progress=None, workers=WORKERS):
     """pairs = [(url, path), ...] downloaded in parallel; each finished file advances
     `progress`. Ctrl+C cancels the queue at once instead of waiting for every pending file."""
-    ex = cf.ThreadPoolExecutor(WORKERS)
+    ex = cf.ThreadPoolExecutor(workers)
     try:
         for f in cf.as_completed([ex.submit(download, *p) for p in pairs]):
             f.result()
@@ -317,7 +317,10 @@ class Progress:
 
     def _draw(self, end=""):
         # never wider than the window: a wrapped line can't be redrawn in place
-        line = self._line()[:max(20, shutil.get_terminal_size((100, 20)).columns - 1)]
+        cols = shutil.get_terminal_size((100, 20)).columns
+        if cols < 40:                     # unknown width (Python 3.9 reports 0)
+            cols = 100
+        line = self._line()[:cols - 1]
         sys.stdout.write("\r" + line + " " * max(0, self._width - len(line)) + end)
         sys.stdout.flush()
         self._width = len(line)

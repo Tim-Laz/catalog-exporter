@@ -3,7 +3,7 @@
 import csv, json, os, re
 
 from . import core, images, ocr, svg
-from .core import (Progress, cdn_url, decodes, slugify, download, get_text, image_size, items, kebab, log, natural_key,
+from .core import (Progress, cdn_url, download_many, decodes, slugify, download, get_text, image_size, items, kebab, log, natural_key,
                    to_webp, unwrap, url_ext)
 
 
@@ -429,9 +429,15 @@ def step_tours(ctx):
         for i, im in enumerate(scenes, 1):
             sid = im.get("id") or im.get("_id")
             id2file[sid] = f"{tname}_{i:02d}_{kebab(im.get('name'))}.jpg"
+        # big files: fetch a few at once (a single connection is often slow), then process
+        download_many([(im["url"], os.path.join(folder, id2file[im.get("id") or im.get("_id")]))
+                       for im in scenes if im.get("url")], progress, workers=4)
         for i, im in enumerate(scenes, 1):
             sid = im.get("id") or im.get("_id")
             path = os.path.join(folder, id2file[sid])
+            if not im.get("url"):
+                ctx.report.issue("Туры", f"{tname}/{id2file[sid]}: у сцены нет картинки в источнике")
+                continue
             download(im["url"], path)
             w, h = image_size(path)
             note = ""
@@ -459,7 +465,6 @@ def step_tours(ctx):
                                "initial_view_raw": im.get("rotation"), "hotspots": links, "note": note})
             if note:
                 ctx.report.add("Туры", f"- `{rel(ctx, path)}` — {note}")
-            progress.advance()
         progress.close()
         apts = users.get(tid, [])
         with open(os.path.join(folder, "tour.json"), "w", encoding="utf-8") as f:
@@ -582,11 +587,10 @@ def step_amenities(ctx):
                 ctx.report.issue("Amenities", f"«{a.get('name')}» ({cat}): в источнике нет файла")
                 progress.advance()
                 continue
-            path = os.path.join(root, folder, f"{i:02d}_{kebab(a.get('name'))}.{url_ext(a['file'])}")
-            download(a["file"], path)
-            entries.append((cat, a, path, image_size(path)))
-            progress.advance()
+            entries.append((cat, a, os.path.join(root, folder, f"{i:02d}_{kebab(a.get('name'))}.{url_ext(a['file'])}")))
+    download_many([(a["file"], path) for _, a, path in entries], progress, workers=4)
     progress.close()
+    entries = [(cat, a, path, image_size(path)) for cat, a, path in entries]
 
     odd = [f"{rel(ctx, p)} ({wh[0]}×{wh[1]})" for _, _, p, wh in entries if wh and wh[0] != 2 * wh[1]]
     if odd:
