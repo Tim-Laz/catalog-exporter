@@ -13,7 +13,7 @@ It runs on your computer. At the end you send us one folder.
 It only **reads** from the catalog. It does not log in, upload or change anything
 there.
 
-You will need the **command we sent you**. It contains the link to your catalog.
+The tool is already set up for your catalog: you only run one short command.
 
 Instructions below are for **Windows 10 / 11**. On a Mac, see [On a Mac](#on-a-mac).
 
@@ -37,12 +37,11 @@ Commands are typed into **PowerShell**. To open it, click **Start**, type
 In PowerShell, run these two commands one after the other:
 
 ```powershell
-winget install -e --id Python.Python.3.13
-winget install -e --id ImageMagick.ImageMagick
+winget install -e --id Python.Python.3.13 --accept-source-agreements --accept-package-agreements
+winget install -e --id ImageMagick.ImageMagick --accept-source-agreements --accept-package-agreements
 ```
 
-If it asks you to accept terms, type **Y** and press Enter. If Windows asks
-*"Do you want to allow this app to make changes"*, click **Yes**.
+If Windows asks *"Do you want to allow this app to make changes"*, click **Yes**.
 
 When both are finished, **close PowerShell**. The new tools only become available
 in a new window.
@@ -72,15 +71,18 @@ in a new window.
 1. In that folder (the one with `export.py`), click the **address bar** at the top of
    the window, type `powershell` and press **Enter**. A PowerShell window opens in this
    folder.
-2. Paste the **command we sent you** and press Enter. It looks like this:
+2. Type this command and press Enter:
 
    ```powershell
-   py export.py "https://view.…/…/projectscene/…" --developer-slug …
+   py export.py
    ```
 
-   If `py` is not recognized, replace `py` with `python` and try again.
+   If `py` is not recognized, type `python export.py` instead.
 
 The run takes about **10 minutes**, and progress lines scroll by while it works.
+Leave the window alone meanwhile: **don't click inside it**. On some Windows versions a
+click starts a text selection that pauses the program (the window title then begins
+with *Select*). If that happens, press **Esc**.
 It is finished when you see:
 
 ```
@@ -88,6 +90,9 @@ Done in …s
 Result: C:\…\output\<project>
 Checks: …/… passed
 ```
+
+If a few lines say **FAIL**, that's fine. Send the result anyway; the details are
+saved for us.
 
 **If it stops or shows an error:** run the same command again. It continues where
 it stopped and keeps everything already downloaded. See also
@@ -119,14 +124,15 @@ That's all. Thank you!
 | What you see | What to do |
 |---|---|
 | `winget : The term 'winget' is not recognized` | Install Python and ImageMagick by hand (see the note in step 1). |
-| `py` / `python` is not recognized, or the Microsoft Store opens | Python is not installed yet, or PowerShell was not reopened after installing it. Close PowerShell, open it again the same way (step 3.1), run again. If it still fails, install Python from python.org with **"Add python.exe to PATH"** ticked. |
+| `py` / `python` is not recognized, or *"Python was not found; run without arguments to install from the Microsoft Store"* | Python is not installed yet, or PowerShell was not reopened after installing it. Close PowerShell, open it again the same way (step 3.1), run again. If it still fails, install Python from python.org with **"Add python.exe to PATH"** ticked. |
 | `ImageMagick (the 'magick' command) was not found` | ImageMagick is not installed yet, or PowerShell was not reopened. Install it (step 1), then open a new PowerShell window and run again. |
 | `can't open file '…export.py'` | PowerShell is not in the folder with `export.py`. Open that folder and use the address bar trick from step 3.1. |
-| `paste the link to your catalog after export.py` | The link is missing or incomplete. Copy the whole command we sent you, including the link in quotes. |
+| `this is not a catalog link` | Something was typed after `export.py`. Run just `py export.py`. |
+| `a file is in use and cannot be written` | A file from the `output` folder is open, e.g. `apartments.csv` in Excel. Close it and run again. |
 | `could not download from the catalog after several tries` | The internet connection dropped or the catalog did not answer. Run the same command again; it continues. |
 | Anything else | Send us a screenshot of the PowerShell window. |
 
-To start over from scratch, add `--fresh` at the end of the command.
+To start over from scratch, run `py export.py --fresh`.
 
 ---
 
@@ -141,10 +147,8 @@ To start over from scratch, add `--fresh` at the end of the command.
 
    ```bash
    cd ~/Downloads/catalog-exporter-main
-   python3 export.py "https://view.…" --developer-slug …
+   python3 export.py
    ```
-
-   Use the exact command we sent you, with `python3` instead of `py`.
 5. Compress the folder in `output` (right-click → **Compress**) and share it as in
    step 4.
 
@@ -152,9 +156,10 @@ To start over from scratch, add `--fresh` at the end of the command.
 
 ## For an AI assistant helping with this (Claude etc.)
 
-- Follow the steps above with the user. The run is `py export.py "<catalog link>"` on
-  Windows, or `python3 export.py "<catalog link>"` on macOS, from the folder that
-  contains `export.py`. `verify.py` re-checks a finished export.
+- Follow the steps above with the user. The run is `py export.py` on Windows or
+  `python3 export.py` on macOS, from the folder that contains `export.py`. The catalog
+  link is built in; another catalog is exported with `py export.py "<link>"`.
+  `verify.py` re-checks a finished export.
 - If the user is in Claude Code, a permission prompt may appear because the tool
   downloads from the catalog's API, its CDN and `firebasestorage.googleapis.com`.
   That is expected. Let the user approve it, or have them run the command themselves.

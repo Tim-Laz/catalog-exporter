@@ -8,8 +8,9 @@ masks, floor plans with their backgrounds and apartment masks, unique 360 tours,
 apartment top views, amenity 360 photos, and an apartments table that ties it all
 together.
 
-    py export.py "<catalog link>"                      # Windows (python3 on macOS)
-    py export.py "<catalog link>" --only floors,tours  # just some parts
+    py export.py                         # Windows (python3 on macOS): the default catalog
+    py export.py "<catalog link>"        # another catalog
+    py export.py --only floors,tours     # just some parts
 
 Needs Python 3.8+ and ImageMagick 7 (the `magick` command):
     Windows:  winget install -e --id ImageMagick.ImageMagick
@@ -22,8 +23,11 @@ Re-running is safe: files already downloaded are kept.
 import argparse, os, shutil, sys, time
 
 from catalog_export import steps, verify
-from catalog_export.core import Api, NetworkError, Report, configure, log, require_tools, setup_console
+from catalog_export.core import (Api, NetworkError, Report, check_python, configure, log, require_tools,
+                                 run_command, setup_console)
 
+# The catalog exported when no link is given on the command line.
+DEFAULT_LINK = "https://view.propvr.tech/RgvWHf/projectscene/6a5f2c591272c5bbc4d298cf/6a5f2d691272c5bbc4d2acad"
 PARTS = ["area", "buildings", "floors", "tours", "topviews", "amenities", "map"]
 DEFAULT_PARTS = [p for p in PARTS if p != "map"]
 
@@ -51,7 +55,7 @@ Every mask is an SVG in the pixel space of its render (viewBox = image size), on
 ## Layouts vs the floor plan
 
 On the floor previews every outline is labelled with the layout the source assigns. The
-script also reads the type printed on the plan itself (macOS text recognition). Where
+script also reads the type printed on the plan itself (the operating system's text recognition). Where
 they differ, `apartments.csv` fills in "layout / tour according to the plan". In the source catalog
 the tour and top view follow the layout, so a wrong layout means a wrong tour and top view.
 
@@ -66,13 +70,13 @@ the tour and top view follow the layout, so a wrong layout means a wrong tour an
 
 def main():
     setup_console()
+    check_python()
     ap = argparse.ArgumentParser(description="Export everything an online 3D property catalog shows.")
-    ap.add_argument("link", nargs="?",
-                    help="link to the catalog, e.g. https://view.<domain>/<org>/projectscene/<project>/...")
+    ap.add_argument("link", nargs="?", default=DEFAULT_LINK,
+                    help="link to the catalog, https://view.<domain>/<org>/projectscene/<project>/... "
+                         "(default: the catalog this tool is set up for)")
     ap.add_argument("--out", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "output"),
                     help="output folder (default: output/ next to this script)")
-    ap.add_argument("--developer-slug", default=None,
-                    help="developer slug used in top-view file names (default: the project slug)")
     ap.add_argument("--project-slug", default=None,
                     help="project slug for file names (default: catalog project name, kebab-case)")
     ap.add_argument("--fresh", action="store_true",
@@ -83,8 +87,8 @@ def main():
 
     ids = configure(args.link)
     if not ids:
-        ap.error("paste the link to your catalog after export.py, in quotes, e.g.\n"
-                 '  python3 export.py "https://view.<domain>/<org>/projectscene/<project>/..."')
+        ap.error("this is not a catalog link. Run the command without anything after export.py:\n"
+                 f"  {run_command()} export.py")
     args.org, args.project = ids
     parts = [p.strip() for p in args.only.split(",") if p.strip()]
     unknown = set(parts) - set(PARTS)
@@ -95,9 +99,8 @@ def main():
     started = time.time()
     report = Report()
     ctx = steps.Ctx(Api(args.org, args.project), None, report, args.org, args.project,
-                    args.developer_slug, args.project_slug)
+                    None, args.project_slug)
     ctx.load()
-    ctx.developer_slug = ctx.developer_slug or ctx.project_slug
     ctx.out = os.path.abspath(os.path.join(args.out, ctx.project_slug))
     if args.fresh and os.path.isdir(ctx.out):
         log(f"--fresh: removing previous output {ctx.out}")
@@ -129,8 +132,12 @@ def main():
     checks = None
     if set(DEFAULT_PARTS) <= set(parts):
         log("\nVerifying the export ...")
-        checks = verify.run(ctx.out)
-        report.add("Автоматические проверки", checks.markdown())
+        try:
+            checks = verify.run(ctx.out)
+            report.add("Автоматические проверки", checks.markdown())
+        except Exception as e:  # noqa: BLE001 — a broken check must not cost the export its report
+            report.issue("Проверки", f"проверка выгрузки упала: {type(e).__name__}: {e}")
+            log(f"Checks could not run ({type(e).__name__}); the export itself is complete.")
     # a partial run must not replace the full report
     report_name = "REPORT.md" if set(DEFAULT_PARTS) <= set(parts) else "REPORT_partial.md"
     report.write(os.path.join(ctx.out, report_name),
@@ -156,6 +163,11 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         log("\nStopped. Run the same command again to continue — finished files are kept.")
         sys.exit(130)
+    except PermissionError as e:
+        log(f"\nERROR: a file is in use and cannot be written:\n  {e.filename}\n"
+            "Close any file from the output folder that is open (for example apartments.csv in Excel)\n"
+            "and run the same command again.")
+        sys.exit(1)
     except NetworkError as e:
         log(f"\nERROR: could not download from the catalog after several tries:\n  {e}\n"
             "Check the internet connection and run the same command again — finished files are kept.")

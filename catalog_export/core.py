@@ -1,7 +1,7 @@
 """Shared plumbing: HTTP, catalog API, CDN urls, ImageMagick, naming, the run report."""
 
 import concurrent.futures as cf
-import json, os, re, shutil, ssl, subprocess, sys, tempfile, time, urllib.parse, urllib.request
+import json, os, re, shutil, ssl, subprocess, sys, tempfile, time, urllib.error, urllib.parse, urllib.request
 
 UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/140.0 Safari/537.36")
@@ -28,6 +28,17 @@ def configure(link):
     return org, project
 
 
+def check_python():
+    if sys.version_info < (3, 9):
+        log(f"ERROR: Python 3.9 or newer is needed (this is {sys.version.split()[0]}).")
+        sys.exit(1)
+
+
+def run_command():
+    """How the user starts Python here, for messages."""
+    return "py" if os.name == "nt" else "python3"
+
+
 def setup_console():
     """Never crash on a character the console cannot show (Windows consoles and
     redirected output default to a legacy code page)."""
@@ -36,6 +47,34 @@ def setup_console():
             stream.reconfigure(encoding="utf-8", errors="replace")
         except (AttributeError, ValueError):
             pass
+    if os.name == "nt":
+        _windows_keep_running()
+
+
+def _windows_keep_running():
+    """Two Windows habits that make a long run look frozen:
+    - QuickEdit: a click inside the console window starts a text selection, and the
+      program is paused at its next output until the selection ends. Switched off for
+      this window while we run (restored at exit).
+    - Sleep: the PC may go to sleep during the run. Kept awake until we finish."""
+    import atexit, ctypes
+    try:
+        kernel32 = ctypes.windll.kernel32
+        kernel32.GetStdHandle.restype = ctypes.c_void_p        # a 64-bit handle, not an int
+        kernel32.GetConsoleMode.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint32)]
+        kernel32.SetConsoleMode.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
+        kernel32.SetThreadExecutionState.argtypes = [ctypes.c_uint32]
+        handle = kernel32.GetStdHandle(-10)                    # STD_INPUT_HANDLE
+        mode = ctypes.c_uint32()
+        if kernel32.GetConsoleMode(handle, ctypes.byref(mode)):
+            ENABLE_QUICK_EDIT_MODE, ENABLE_EXTENDED_FLAGS = 0x0040, 0x0080
+            kernel32.SetConsoleMode(handle, (mode.value | ENABLE_EXTENDED_FLAGS) & ~ENABLE_QUICK_EDIT_MODE)
+            atexit.register(kernel32.SetConsoleMode, handle, mode.value)
+        ES_CONTINUOUS, ES_SYSTEM_REQUIRED = 0x80000000, 0x00000001
+        kernel32.SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED)
+        atexit.register(kernel32.SetThreadExecutionState, ES_CONTINUOUS)
+    except Exception:  # noqa: BLE001 — a convenience only; never block the export
+        pass
 
 
 def log(msg=""):
@@ -78,6 +117,8 @@ def _fetch(url, dest, timeout):
     """Write url to the open file dest. A Python from python.org often has no CA
     certificates installed; macOS curl uses the system ones, so fall back to it."""
     global _USE_CURL
+    if not url.lower().startswith("https://"):
+        raise ValueError(f"refusing a non-https URL: {url[:80]}")
     if not _USE_CURL:
         try:
             req = urllib.request.Request(url, headers={"User-Agent": UA})
@@ -91,17 +132,25 @@ def _fetch(url, dest, timeout):
             log("   (Python has no SSL certificates here — using the system curl instead)")
     dest.seek(0)
     dest.truncate()
-    subprocess.run(["curl", "-sSfL", "--max-time", str(timeout), "-A", UA, url], stdout=dest, check=True)
+    subprocess.run(["curl", "-sSfL", "--proto", "=https", "--max-time", str(timeout), "-A", UA, "--", url],
+                   stdout=dest, check=True)
 
 
 def _retry(fn, url, tries=4):
+    """Retry network trouble; a 4xx answer (the file is not there) fails at once."""
     last = None
     for n in range(tries):
         try:
             return fn()
-        except Exception as e:  # noqa: BLE001
+        except urllib.error.HTTPError as e:
+            if 400 <= e.code < 500:
+                raise NetworkError(f"{url}\n  HTTP {e.code} (not available on the server)") from None
             last = e
-            time.sleep(2 * (n + 1))
+        except ValueError as e:                     # e.g. a non-https URL: retrying won't help
+            raise NetworkError(f"{url}\n  {e}") from None
+        except (urllib.error.URLError, OSError, subprocess.CalledProcessError, NetworkError) as e:
+            last = e
+        time.sleep(2 * (n + 1))
     raise NetworkError(f"{url}\n  {last}")
 
 
@@ -142,8 +191,8 @@ def looks_valid(path):
     if head.startswith(b"\x89PNG"):
         return b"IEND" in tail or decodes(path)
     if head[:4] == b"RIFF" and head[8:12] == b"WEBP":
-        return int.from_bytes(head[4:8], "little") + 8 == size
-    return False
+        return int.from_bytes(head[4:8], "little") + 8 == size or decodes(path)
+    return decodes(path)             # another format: let ImageMagick decide
 
 
 def decodes(path):
@@ -185,7 +234,9 @@ def download_many(pairs):
         for f in cf.as_completed([ex.submit(download, *p) for p in pairs]):
             f.result()
     except BaseException:
-        ex.shutdown(wait=False, cancel_futures=True)
+        # wait for the downloads already running: on Windows their open files would
+        # otherwise block deleting the temp folder and hide the real error
+        ex.shutdown(wait=True, cancel_futures=True)
         raise
     ex.shutdown()
 

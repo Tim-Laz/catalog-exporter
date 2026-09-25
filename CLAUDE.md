@@ -15,8 +15,10 @@ catalog is given by its viewer link, and every host is derived from that link.
   `LC_ALL=C PYTHONCOERCECLOCALE=0 python3 -X utf8=0` mimics Windows' non-UTF-8 defaults.
 - **Data problems:** the steps report problems in the catalog's own data. Don't "fix"
   them silently in the output; report them.
-- **Keep the repo generic:** no provider names, client names, hosts or project ids in
-  code, docs or commit messages. Everything project-specific comes from the link.
+- **Keep the repo generic:** no provider or client names in code, docs or commit
+  messages. The only project-specific value is `DEFAULT_LINK` in `export.py`, so the
+  client can run `py export.py` with nothing to paste. Everything else is derived from
+  the link: hosts from its domain, slugs from the API.
 - `output/` and `.cache/` are git-ignored. Never commit exported media.
 - A run downloads from the catalog's API, its CDN and `firebasestorage.googleapis.com`.
   If a permission prompt stops it, ask the user to approve it, or to run the command

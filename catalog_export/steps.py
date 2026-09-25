@@ -25,6 +25,11 @@ class Ctx:
                      if p.get("_id") == self.project), {})
         self.project_name = proj.get("name") or self.project
         self.project_slug = self.project_slug or kebab(self.project_name)
+        # the developer slug in top-view names comes from the organisation's own name
+        org = self.api.org("getOrganization")
+        org = unwrap(org) if isinstance(org, dict) else {}
+        if not self.developer_slug:
+            self.developer_slug = kebab(org.get("name")) if org.get("name") else self.project_slug
 
         self.buildings = {}
         for b in items(self.api.project("getListOfBuildings")):
@@ -34,20 +39,22 @@ class Ctx:
 
         # getListofUnits ignores building_id / floor_id: one call returns the whole project
         self.units = sorted(items(self.api.project("getListofUnits")),
-                            key=lambda u: (self.bslug(u["building_id"]), int(u.get("floor_id") or 0),
+                            key=lambda u: (self.bslug(u["building_id"]), natural_key(u.get("floor_id") or ""),
                                            natural_key(u.get("name"))))
         self.unit_by_id = {u["_id"]: u for u in self.units}
         self.unit_by_key = {(u["building_id"], str(u["floor_id"]), str(u["name"])): u for u in self.units}
 
         self.unitplans = {p["_id"]: p for p in items(self.api.project("getListOfUnitplan"))}
-        self.tours = {tid: {**unwrap(t), "_id": tid} for tid, t in self.api.project("ListTours").items()}
+        raw_tours = self.api.project("ListTours")
+        pairs = raw_tours.items() if isinstance(raw_tours, dict) else ((unwrap(t).get("_id"), t) for t in raw_tours or [])
+        self.tours = {tid: {**unwrap(t), "_id": tid} for tid, t in pairs if tid}
         self.amenities = items(self.api.project("GetAmenities"))
         self.scenes = [
             {**s["sceneData"], "svg": list((s.get("svgData") or {}).values())}
             for s in items(self.api.project("getAllScenes"))
         ]
         self._classify_scenes()
-        log(f"  project '{self.project_name}' -> slug '{self.project_slug}'")
+        log(f"  project '{self.project_name}' -> slug '{self.project_slug}', developer '{self.developer_slug}'")
         log(f"  {len(self.buildings)} buildings, {len(self.units)} apartments, "
             f"{len(self.unitplans)} unit plans, {len(self.tours)} tours, "
             f"{len(self.amenities)} amenities, {len(self.scenes)} scenes\n")
@@ -86,7 +93,8 @@ def fetch_fragment(layer):
 
 
 def rel(ctx, path):
-    return os.path.relpath(path, ctx.out)
+    """Path inside the export, always with '/' so CSVs and REPORT.md read the same on every OS."""
+    return os.path.relpath(path, ctx.out).replace(os.sep, "/")
 
 
 def write_csv(path, rows, header):
@@ -241,7 +249,9 @@ def step_floors(ctx, mapping):
         w, h = image_size(background)
 
         svg_url = next((sv.get("svg_url") for sv in s["svg"] if sv.get("svg_url")), None)
-        raw = get_text(cdn_url(svg_url))
+        raw = get_text(cdn_url(svg_url)) if svg_url else ""
+        if not svg_url:
+            ctx.report.issue("Этажи", f"{folder_name} {b['name']}: у сцены этажа нет маски в источнике")
         os.makedirs(os.path.join(folder, "_source"), exist_ok=True)
         with open(os.path.join(folder, "_source", "mask_source.svg"), "w", encoding="utf-8") as f:
             f.write(raw)
@@ -276,7 +286,8 @@ def step_floors(ctx, mapping):
                 by_type.setdefault(i["plans"][0], []).append(i["area"])
     median = {t: sorted(a)[len(a) // 2] for t, a in by_type.items() if len(a) >= 3}
 
-    use_ocr = ocr.available()
+    cache = os.path.join(ctx.root, ".cache")
+    use_ocr = ocr.available(cache)
     if not use_ocr:
         ctx.report.issue("Этажи", "распознавание текста недоступно (macOS: нужны Xcode command line tools; "
                                   "Windows: нужен язык распознавания в системе) — тип квартиры, напечатанный на "
@@ -295,7 +306,12 @@ def step_floors(ctx, mapping):
 
         if use_ocr:
             bw, bh, bx, by = map(int, re.match(r"(\d+)x(\d+)\+(\d+)\+(\d+)", bbox).groups())
-            labels_found = ocr.printed_types(background, (bx, by, bw, bh), os.path.join(ctx.root, ".cache"))
+            try:
+                labels_found = ocr.printed_types(background, (bx, by, bw, bh), cache)
+            except Exception as e:  # noqa: BLE001 — OCR is an extra check; never let it stop the export
+                ctx.report.issue("Этажи", f"распознавание текста упало ({type(e).__name__}: {e}) — "
+                                          "дальше сверка планировок только по площади")
+                use_ocr, labels_found = False, []
             for pos, d in zones:
                 info[pos]["printed"] = sorted({n for n, x, y in labels_found if ocr.point_in_path(x, y, d)})
 
@@ -377,7 +393,10 @@ def step_floors(ctx, mapping):
 # --------------------------------------------------------------------------- #
 
 def tour_folder_name(tour):
-    return re.sub(r"[^A-Za-z0-9-]+", "-", tour.get("name") or "tour").strip("-")
+    """'1BR' stays '1BR'; anything unsafe for a file name becomes '-'. A name with no usable
+    characters falls back to the tour id so two tours never share a folder by accident."""
+    name = re.sub(r"-{2,}", "-", re.sub(r"[^A-Za-z0-9-]+", "-", tour.get("name") or "")).strip("-")
+    return name or f"tour-{str(tour.get('_id', ''))[-6:]}"
 
 
 def step_tours(ctx):
@@ -464,6 +483,12 @@ def plan_images(ctx, plan):
     return out
 
 
+def safe_name(value):
+    """A unit number as a file-name part: letters, digits and '-' only (no Windows-reserved
+    characters, no '_' which separates the parts of a top-view name)."""
+    return re.sub(r"[^A-Za-z0-9-]+", "-", str(value)).strip("-") or "unit"
+
+
 def config_slug(ctx, plan):
     slug = slugify(plan.get("name"))
     if "_" in slug or not slug:
@@ -496,12 +521,23 @@ def step_topviews(ctx):
             continue
         cfg, b = config_slug(ctx, plan), u["building_id"]
         for suffix, url in imgs:
-            src = download(url, os.path.join(root, "_source", f"{cfg}{suffix}.{url_ext(url, 'png')}"))
+            # keyed by the image itself: two layouts with the same name must not share a file
+            key = re.sub(r"[^A-Za-z0-9]", "", url.split("?")[0])[-16:]
+            src = download(url, os.path.join(root, "_source", f"{cfg}{suffix}__{key}.{url_ext(url, 'png')}"))
             by_cfg = os.path.join(root, "by-configuration", f"{prefix(b)}_{cfg}_plan{suffix}.webp")
             if by_cfg not in made:
                 to_webp(src, by_cfg, max_side=2560)
                 made[by_cfg] = src
-            images.copy(by_cfg, os.path.join(root, "by-apartment", f"{prefix(b)}_{u['name']}_plan{suffix}.webp"))
+            elif made[by_cfg] != src:
+                ctx.report.issue("Топ-вью", f"{rel(ctx, by_cfg)}: у планировки «{plan.get('name')}» в этом здании "
+                                            "разные картинки — в файл по планировке попала первая, в by-apartment "
+                                            "у каждой квартиры своя")
+            unit = safe_name(u["name"])
+            dest = os.path.join(root, "by-apartment", f"{prefix(b)}_{unit}_plan{suffix}.webp")
+            if made[by_cfg] == src:
+                images.copy(by_cfg, dest)
+            else:
+                to_webp(src, dest, max_side=2560)
     for path, src in sorted(made.items()):
         ctx.report.add("Топ-вью", f"- `{rel(ctx, path)}` — {size_str(path)} (исходник {size_str(src)})")
 
@@ -516,9 +552,17 @@ def step_amenities(ctx):
     by_cat, entries = {}, []
     for a in sorted(ctx.amenities, key=lambda a: (a.get("category") or "", a.get("order") or 0)):
         by_cat.setdefault(a.get("category") or "other", []).append(a)
+    folders = {}
     for cat, group in by_cat.items():
+        folder = kebab(cat)
+        if folder in folders.values():               # two categories that slug the same
+            folder = f"{folder}-{len(folders) + 1}"
+        folders[cat] = folder
         for i, a in enumerate(group, 1):
-            path = os.path.join(root, kebab(cat), f"{i:02d}_{kebab(a.get('name'))}.{url_ext(a['file'])}")
+            if not a.get("file"):
+                ctx.report.issue("Amenities", f"«{a.get('name')}» ({cat}): в источнике нет файла")
+                continue
+            path = os.path.join(root, folder, f"{i:02d}_{kebab(a.get('name'))}.{url_ext(a['file'])}")
             download(a["file"], path)
             entries.append((cat, a, path, image_size(path)))
 

@@ -15,20 +15,21 @@ python3 verify.py [output/<project>]             # re-check a finished export
 ```
 
 `<link>` is the catalog viewer link, `https://view.<domain>/<org>/projectscene/<project>/…`.
-The API (`api.<domain>`), CDN (`storagecdn.<domain>`) and page links are derived from
-it, and no host or project id is hard-coded.
+Without it, the catalog in `DEFAULT_LINK` (`export.py`) is used. The API
+(`api.<domain>`), CDN (`storagecdn.<domain>`) and page links are derived from the link.
+Nothing else is host- or project-specific; the developer slug comes from the
+organisation's name in the API.
 
 | Flag | Meaning |
 |---|---|
 | `--only a,b` | Parts to run: `area`, `buildings`, `floors`, `tours`, `topviews`, `amenities`, `map`. The default is all except `map` (the map overview, 7680×4320). |
 | `--fresh` | Remove `output/<project>` before starting |
 | `--out DIR` | Output root (default: `output/` next to `export.py`) |
-| `--developer-slug` | First part of top-view file names (default: the project slug) |
 | `--project-slug` | Second part (default: the catalog's project name in kebab-case) |
 
 Requirements:
 
-- Windows 10/11 or macOS, Python 3.8+ (standard library only).
+- Windows 10/11 or macOS, Python 3.9+ (standard library only).
 - `magick` (ImageMagick 7), which does all image work, including the previews (drawn
   from MVG files).
 - Optional, for the printed-layout check:
@@ -113,7 +114,8 @@ dict keyed by id; some records keep their fields under `_doc` (`unwrap()`).
 
 | Endpoint | Gives |
 |---|---|
-| `listProjectsFromOrganization` (org) | project name |
+| `getOrganization` (org) | organisation name → developer slug (first part of top-view names) |
+| `listProjectsFromOrganization` (org) | project name → project slug |
 | `getListOfBuildings` | buildings + floors. Its `units` field is always empty. |
 | `getListofUnits` | **all** apartments of the project. `building_id`/`floor_id` params are ignored; use each unit's `building_id`. |
 | `getListOfUnitplan` | layouts: `tour_id`, `image_url` (top view). A duplex has `floor_unitplans` (lower, upper). |
@@ -153,13 +155,20 @@ How the endpoints connect:
   - the console is reconfigured so it never crashes on a character it can't show
   - long ImageMagick drawing commands go through `-draw @file.mvg`, because Windows
     caps the command line at 32k characters
+- **Windows console:** QuickEdit is switched off while running, because a stray click
+  would otherwise pause the process at its next output. System sleep is also blocked
+  until the run ends. Both are restored at exit.
 - **Console output:** the notes about the catalog data are written only to REPORT.md.
   The console shows their count, so the person running the tool doesn't see
   internal notes.
 - **Stitched files** are written in a temp dir and moved into place.
 - **Tour upgrades** are decided by the file's actual width, so an interrupted rebuild
   is redone.
-- **Ctrl+C:** `download_many` cancels its queue.
+- **Ctrl+C:** `download_many` cancels its queue and waits for the running downloads, so
+  Windows can delete the temp folder and the friendly message is shown.
+- **OCR never stops an export:** one failing image is skipped, and a crash of the OCR step
+  turns it off with a note. The availability probe recognises a real generated image.
+- **HTTP 4xx fails at once** (no retries); network errors and 5xx are retried.
 - **Python without CA certificates** (python.org installs) falls back to the system `curl`.
 - **Output is deterministic:** re-runs produce byte-identical files (PNG date chunks
   are excluded).

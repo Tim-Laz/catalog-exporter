@@ -6,7 +6,7 @@ Windows PowerShell). Optional: when neither is available the check is skipped.""
 import os, re, shutil, subprocess, sys, tempfile
 
 from .core import magick
-from .svg import path_points
+from .svg import label_font, path_points
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SWIFT_SRC = os.path.join(HERE, "ocr.swift")
@@ -22,16 +22,38 @@ def _powershell():
             "-ExecutionPolicy", "Bypass", "-File", PS1]
 
 
-def available():
+def _run(cmd, paths):
+    """OCR every image; returns [(index, x, y, text)]. Lines are keyed by the image's
+    index, not its path, so no path has to survive a round trip through the console."""
+    out = subprocess.run([*cmd, *paths], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                         timeout=600).stdout.decode("utf-8", "replace")
+    lines = []
+    for line in out.lstrip("\ufeff").splitlines():
+        parts = line.split("\t", 3)
+        if len(parts) == 4 and parts[0].isdigit():
+            lines.append((int(parts[0]), float(parts[1]), float(parts[2]), parts[3]))
+    return lines
+
+
+def available(cache_dir):
+    """Actually recognises a small generated "3 BHK" image, so a machine where OCR only
+    half works is treated as having no OCR."""
     global _available
     if _available is None:
-        if sys.platform == "darwin":
-            _available = shutil.which("swiftc") is not None
-        elif os.name == "nt" and shutil.which("powershell"):
-            # also fails when Windows has no OCR language installed
-            _available = subprocess.run(_powershell() + ["-Probe"], stdout=subprocess.DEVNULL,
-                                        stderr=subprocess.DEVNULL).returncode == 0
-        else:
+        _available = False
+        try:
+            if (sys.platform == "darwin" and shutil.which("swiftc")
+                    and subprocess.run(["xcode-select", "-p"], stdout=subprocess.DEVNULL,
+                                       stderr=subprocess.DEVNULL).returncode == 0) \
+                    or (os.name == "nt" and shutil.which("powershell")):
+                with tempfile.TemporaryDirectory() as tmp:
+                    probe = os.path.join(tmp, "probe.png")
+                    font = label_font()
+                    magick("-size", "480x160", "xc:white", *(["-font", font] if font else []),
+                           "-pointsize", "64", "-fill", "black", "-annotate", "+30+105", "3 BHK", probe)
+                    _available = any(TYPE_RE.search(t.translate(HOMOGLYPHS).upper())
+                                     for _, _, _, t in _run(_command(cache_dir), [probe]))
+        except Exception:  # noqa: BLE001 — any failure just means "no OCR here"
             _available = False
     return _available
 
@@ -55,22 +77,17 @@ def printed_types(image, bbox, cache_dir):
     tile, step, up = 300 * scale, 240 * scale, 4 // scale if scale < 4 else 1
     found = []
     with tempfile.TemporaryDirectory() as tmp:
-        tiles = {}
+        tiles = []
         for ty in range(y0, y0 + bh, step):
             for tx in range(x0, x0 + bw, step):
                 p = os.path.join(tmp, f"{tx}_{ty}.png")
                 magick(image, "-crop", f"{tile}x{tile}+{tx}+{ty}", "+repage", "-resize", f"{up * 100}%", p)
-                tiles[p] = (tx, ty)
-        out = subprocess.check_output([*cmd, *tiles], stderr=subprocess.DEVNULL).decode("utf-8", "replace")
-        for line in out.splitlines():
-            parts = line.split("\t", 3)
-            if len(parts) != 4 or parts[0] not in tiles:
-                continue
-            path, x, y, text = parts
+                tiles.append((p, tx, ty))
+        for i, x, y, text in _run(cmd, [p for p, _, _ in tiles]):
             m = TYPE_RE.search(text.translate(HOMOGLYPHS).upper())
-            if m:
-                tx, ty = tiles[path]
-                found.append((int(m.group(1)), tx + int(x) / up, ty + int(y) / up))
+            if m and i < len(tiles):
+                _, tx, ty = tiles[i]
+                found.append((int(m.group(1)), tx + x / up, ty + y / up))
     # overlapping tiles read the same label twice
     uniq = []
     for n, x, y in found:

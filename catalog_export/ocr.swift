@@ -1,11 +1,12 @@
-// Prints every text line macOS Vision finds in each image:  <file>\t<x>\t<y>\t<text>
+// Prints every text line macOS Vision finds in each image:  <index>\t<x>\t<y>\t<text>
+// (index = position of the image in the argument list)
 // (x, y = centre of the line in pixels, origin top-left). Used to read the apartment
 // type printed on floor plans.
 import AppKit
 import Foundation
 import Vision
 
-for path in CommandLine.arguments.dropFirst() {
+for (index, path) in CommandLine.arguments.dropFirst().enumerated() {
     guard let img = NSImage(contentsOf: URL(fileURLWithPath: path)),
           let cg = img.cgImage(forProposedRect: nil, context: nil, hints: nil) else { continue }
     let req = VNRecognizeTextRequest()
@@ -17,6 +18,6 @@ for path in CommandLine.arguments.dropFirst() {
     for o in req.results ?? [] {
         guard let t = o.topCandidates(1).first else { continue }
         let b = o.boundingBox
-        print("\(path)\t\(Int(b.midX * w))\t\(Int((1 - b.midY) * h))\t\(t.string)")
+        print("\(index)\t\(Int(b.midX * w))\t\(Int((1 - b.midY) * h))\t\(t.string)")
     }
 }

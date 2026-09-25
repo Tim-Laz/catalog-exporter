@@ -40,9 +40,8 @@ def stitch_dzi(dzi_url, out_path):
             col = os.path.join(tmp, f"col_{c}.png")
             magick(*args, "-append", col)
             col_files.append(col)
-        tmp_out = os.path.join(tmp, "render.jpg")
-        magick(*col_files, "+append", "-quality", "95", tmp_out)
-        shutil.move(tmp_out, out_path)   # never leave a half-written render behind
+        magick(*col_files, "+append", "-quality", "95", "jpg:" + out_path + ".part")
+        os.replace(out_path + ".part", out_path)   # never leave a half-written render behind
     return w, h, cols * rows
 
 
@@ -76,9 +75,8 @@ def stitch_pano_tiles(tile_base, out_path):
             row_files.append(row)
         square = os.path.join(tmp, "square.png")
         magick(*row_files, "-append", square)
-        tmp_out = os.path.join(tmp, "pano.jpg")
-        magick(square, "-resize", f"{w}x{h}!", "-quality", "92", tmp_out)
-        shutil.move(tmp_out, out_path)
+        magick(square, "-resize", f"{w}x{h}!", "-quality", "92", "jpg:" + out_path + ".part")
+        os.replace(out_path + ".part", out_path)
     return w, h
 
 
@@ -135,8 +133,12 @@ def visual_duplicates(paths, threshold=0.04):
         thumbs = {}
         for i, p in enumerate(paths):
             t = os.path.join(tmp, f"{i}.png")
-            magick(p + "[0]", "-resize", "64x32!", "-colorspace", "Gray", t)
+            try:
+                magick(p + "[0]", "-resize", "64x32!", "-colorspace", "Gray", t)
+            except subprocess.CalledProcessError:
+                continue                     # not an image ImageMagick can read: no duplicate check
             thumbs[p] = t
+        paths = [p for p in paths if p in thumbs]
         groups, seen = [], set()
         for i, a in enumerate(paths):
             if a in seen:
@@ -146,7 +148,7 @@ def visual_duplicates(paths, threshold=0.04):
                 if b in seen:
                     continue
                 r = subprocess.run(["magick", "compare", "-metric", "RMSE", thumbs[a], thumbs[b], "null:"],
-                                   capture_output=True, text=True)
+                                   capture_output=True, text=True, errors="replace")
                 m = re.search(r"\(([\d.e-]+)\)", r.stderr)
                 if m and float(m.group(1)) < threshold:
                     group.append(b)

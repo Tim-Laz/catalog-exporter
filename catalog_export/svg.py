@@ -136,7 +136,7 @@ def write_mask(path, width, height, zones, note=""):
         f.write("\n".join(l for l in lines if l) + "\n")
 
 
-def _label_font():
+def label_font():
     return next((f for f in FONT_CANDIDATES if os.path.exists(f)), None)
 
 
@@ -156,7 +156,7 @@ def render_preview(image_path, width, height, zones, out_jpg, labels=None, max_w
         mvg += [f"fill '{fill}'", f"stroke '{stroke}'", f"path '{d}'"]
     if labels is None:
         labels = [(zid, *c) for zid, d in zones if (c := path_center(d))]
-    font = _label_font()
+    font = label_font()
     text = [f"font '{font.replace(chr(92), '/')}'"] if font else []
     text += [f"font-size {fs}", "text-anchor middle"]
     for t, x, y in labels:
