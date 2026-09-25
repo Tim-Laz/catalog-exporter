@@ -1,0 +1,20 @@
+# exported data — never commit media or generated structure
+output/
+*.jpg
+*.jpeg
+*.png
+*.webp
+
+# python
+__pycache__/
+*.pyc
+
+# os / editor
+.DS_Store
+.claude/settings.local.json
+
+# local working notes (client context, not for the public repo)
+local/
+
+# compiled helper (OCR)
+.cache/
