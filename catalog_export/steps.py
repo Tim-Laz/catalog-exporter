@@ -123,6 +123,8 @@ def export_dzi_scene(ctx, scene, folder, name, zones_from_layers, section, mask_
     dzi = cdn_url(scene["background"]["high_resolution"])
     if not os.path.exists(render) or not decodes(render):
         images.stitch_dzi(dzi, render, f"{name} render")
+    else:
+        log(f"   {name} render  already downloaded")
     w, h = image_size(render)
 
     zones, labels = [], []
@@ -516,6 +518,12 @@ def config_slug(ctx, plan):
     return slug
 
 
+def source_name(ctx, plan, suffix, url):
+    """Keyed by the image itself: two layouts with the same name must not share a file."""
+    key = re.sub(r"[^A-Za-z0-9]", "", url.split("?")[0])[-16:]
+    return f"{config_slug(ctx, plan)}{suffix}__{key}.{url_ext(url, 'png')}"
+
+
 def topview_prefix(ctx, building_id):
     return f"{ctx.developer_slug}_{ctx.project_slug}_{ctx.bslug(building_id)}"
 
@@ -533,6 +541,13 @@ def step_topviews(ctx):
     prefix = lambda b: topview_prefix(ctx, b)  # noqa: E731
     made = {}
     progress = Progress("top views", len(ctx.units), "apartments")
+    # the few big source images first, a few at once; the loop below then finds them cached
+    sources = {}
+    for u in ctx.units:
+        plan = ctx.unitplans.get(u.get("unitplan_id")) or {}
+        for suffix, url in plan_images(ctx, plan):
+            sources[url] = os.path.join(root, "_source", source_name(ctx, plan, suffix, url))
+    download_many(list(sources.items()), workers=4)
     for u in ctx.units:
         progress.advance()
         plan = ctx.unitplans.get(u.get("unitplan_id")) or {}
@@ -543,9 +558,7 @@ def step_topviews(ctx):
             continue
         cfg, b = config_slug(ctx, plan), u["building_id"]
         for suffix, url in imgs:
-            # keyed by the image itself: two layouts with the same name must not share a file
-            key = re.sub(r"[^A-Za-z0-9]", "", url.split("?")[0])[-16:]
-            src = download(url, os.path.join(root, "_source", f"{cfg}{suffix}__{key}.{url_ext(url, 'png')}"))
+            src = download(url, os.path.join(root, "_source", source_name(ctx, plan, suffix, url)))
             by_cfg = os.path.join(root, "by-configuration", f"{prefix(b)}_{cfg}_plan{suffix}.webp")
             if by_cfg not in made:
                 to_webp(src, by_cfg, max_side=2560)
