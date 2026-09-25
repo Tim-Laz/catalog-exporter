@@ -28,6 +28,16 @@ def configure(link):
     return org, project
 
 
+def setup_console():
+    """Never crash on a character the console cannot show (Windows consoles and
+    redirected output default to a legacy code page)."""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
+
+
 def log(msg=""):
     print(msg, flush=True)
 
@@ -115,16 +125,40 @@ def get_text(url):
 IMAGE_EXT = (".jpg", ".jpeg", ".png", ".webp")
 
 
+def looks_valid(path):
+    """Cheap check that a downloaded file is a complete image without starting a process
+    per file (slow on Windows): the right header and, for JPEG/PNG, the end marker near
+    the end. Only an unusual file falls back to a full decode."""
+    try:
+        with open(path, "rb") as f:
+            head = f.read(12)
+            size = f.seek(0, os.SEEK_END)
+            f.seek(max(0, size - 4096))
+            tail = f.read()
+    except OSError:
+        return False
+    if head.startswith(b"\xff\xd8"):
+        return b"\xff\xd9" in tail or decodes(path)
+    if head.startswith(b"\x89PNG"):
+        return b"IEND" in tail or decodes(path)
+    if head[:4] == b"RIFF" and head[8:12] == b"WEBP":
+        return int.from_bytes(head[4:8], "little") + 8 == size
+    return False
+
+
 def decodes(path):
-    return subprocess.run(["magick", "identify", path + "[0]"], stdout=subprocess.DEVNULL,
-                          stderr=subprocess.DEVNULL).returncode == 0
+    """Full decode. A truncated file only produces a warning ("premature end of data"),
+    so the warning text is checked as well as the exit code."""
+    r = subprocess.run(["magick", path + "[0]", "null:"], stdout=subprocess.DEVNULL,
+                       stderr=subprocess.PIPE, text=True, errors="replace")
+    return r.returncode == 0 and not re.search(r"premature end|corrupt|truncat|unexpected end", r.stderr, re.I)
 
 
 def download(url, path):
     """Download to path (atomic). Files from an earlier run are kept, so a re-run
     resumes — unless an image no longer decodes, then it is fetched again."""
     if os.path.exists(path) and os.path.getsize(path) > 0:
-        if not path.lower().endswith(IMAGE_EXT) or decodes(path):
+        if not path.lower().endswith(IMAGE_EXT) or looks_valid(path):
             return path
         os.remove(path)
     os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -132,7 +166,7 @@ def download(url, path):
     def go():
         with open(path + ".part", "wb") as f:
             _fetch(url, f, 180)
-        if path.lower().endswith(IMAGE_EXT) and not decodes(path + ".part"):
+        if path.lower().endswith(IMAGE_EXT) and not looks_valid(path + ".part"):
             raise NetworkError("downloaded file is not a valid image")
         os.replace(path + ".part", path)
         return path
@@ -218,7 +252,7 @@ class Api:
     def save(self, folder):
         os.makedirs(folder, exist_ok=True)
         for name, data in self.raw.items():
-            with open(os.path.join(folder, name + ".json"), "w") as f:
+            with open(os.path.join(folder, name + ".json"), "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2, ensure_ascii=False)
 
     def project(self, endpoint):
@@ -233,11 +267,15 @@ class Api:
 # --------------------------------------------------------------------------- #
 
 def require_tools():
-    missing = [t for t in ("magick", "rsvg-convert") if not shutil.which(t)]
-    if missing:
-        log("ERROR: missing tool(s): " + ", ".join(missing))
-        log("Install them once with Homebrew:   brew install imagemagick librsvg")
-        sys.exit(1)
+    if shutil.which("magick"):
+        return
+    log("ERROR: ImageMagick (the 'magick' command) was not found.")
+    if os.name == "nt":
+        log("Install it once:   winget install -e --id ImageMagick.ImageMagick")
+        log("then close this window, open a new one and run the command again.")
+    else:
+        log("Install it once:   brew install imagemagick")
+    sys.exit(1)
 
 
 def magick(*args):
@@ -277,8 +315,8 @@ class Report:
         self.sections.setdefault(section, []).append(line)
 
     def issue(self, section, text):
+        # kept for REPORT.md only; the console shows just the count at the end
         self.issues.append((section, text))
-        log(f"   ! {text}")
 
     def write(self, path, header):
         lines = [header, ""]
@@ -289,5 +327,5 @@ class Report:
             lines.append("Не найдено.")
         for title, body in self.sections.items():
             lines += ["", f"## {title}", "", *body]
-        with open(path, "w") as f:
+        with open(path, "w", encoding="utf-8") as f:
             f.write("\n".join(lines) + "\n")

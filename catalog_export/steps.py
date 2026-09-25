@@ -123,7 +123,7 @@ def export_dzi_scene(ctx, scene, folder, name, zones_from_layers, section, mask_
         frag = fetch_fragment(layer)
         src = os.path.join(folder, "_source", f"{zid}.svg")
         os.makedirs(os.path.dirname(src), exist_ok=True)
-        with open(src, "w") as f:
+        with open(src, "w", encoding="utf-8") as f:
             f.write(frag)
         d, transformed = svg.gtag_d(frag)
         if transformed:
@@ -243,7 +243,7 @@ def step_floors(ctx, mapping):
         svg_url = next((sv.get("svg_url") for sv in s["svg"] if sv.get("svg_url")), None)
         raw = get_text(cdn_url(svg_url))
         os.makedirs(os.path.join(folder, "_source"), exist_ok=True)
-        with open(os.path.join(folder, "_source", "mask_source.svg"), "w") as f:
+        with open(os.path.join(folder, "_source", "mask_source.svg"), "w", encoding="utf-8") as f:
             f.write(raw)
         groups = svg.floor_groups(raw)
         vb = re.search(r'viewBox="0 0 ([\d.]+) ([\d.]+)"', raw)
@@ -278,8 +278,9 @@ def step_floors(ctx, mapping):
 
     use_ocr = ocr.available()
     if not use_ocr:
-        ctx.report.issue("Этажи", "swiftc не найден (нужны Xcode command line tools) — тип квартиры, "
-                                  "напечатанный на плане, не сверен с источником; осталась только сверка по площади")
+        ctx.report.issue("Этажи", "распознавание текста недоступно (macOS: нужны Xcode command line tools; "
+                                  "Windows: нужен язык распознавания в системе) — тип квартиры, напечатанный на "
+                                  "плане, не сверен с источником; осталась только сверка по площади")
     ctx.unit_printed, ctx.unit_layout_check = {}, {}
 
     for m, folder, folder_name, background, w, h, zones, info in groups_out:
@@ -427,7 +428,7 @@ def step_tours(ctx):
             if note:
                 ctx.report.add("Туры", f"- `{rel(ctx, path)}` — {note}")
         apts = users.get(tid, [])
-        with open(os.path.join(folder, "tour.json"), "w") as f:
+        with open(os.path.join(folder, "tour.json"), "w", encoding="utf-8") as f:
             json.dump({"tour": tname, "source_tour_id": tid, "scenes": out_scenes,
                        "apartments": [f"{ctx.buildings[u['building_id']]['name']} №{u['name']}" for u in apts],
                        "hotspot_note": "position_xyz = point on a sphere (radius ~90), three.js coords: "

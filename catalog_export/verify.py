@@ -59,7 +59,9 @@ class Checks:
 
 
 def load_raw(out):
-    raw = lambda n: json.load(open(os.path.join(out, "_raw_api", n + ".json")))["data"]  # noqa: E731
+    def raw(name):
+        with open(os.path.join(out, "_raw_api", name + ".json"), encoding="utf-8") as f:
+            return json.load(f)["data"]
     return {
         "buildings": {b["_id"]: b for b in items(raw("getListOfBuildings"))},
         "units": items(raw("getListofUnits")),
@@ -309,7 +311,8 @@ def run(out):
             sum(int(r["Квартир"]) for r in tour_rows) == len(with_tour))
     for tr in tour_rows:
         folder = os.path.join(troot, tr["Тур"])
-        tj = json.load(open(os.path.join(folder, "tour.json")))
+        with open(os.path.join(folder, "tour.json"), encoding="utf-8") as f:
+            tj = json.load(f)
         files = [s["file"] for s in tj["scenes"]]
         c.check(G, f"{tr['Тур']}: панорам = сцен в API",
                 len(files) == len(items(raw["tours"][tj["source_tour_id"]].get("images", []))))
@@ -350,6 +353,8 @@ def run(out):
 
 def main(argv):
     import sys
+    from .core import setup_console
+    setup_console()
     out = argv[1] if len(argv) > 1 else None
     if not out:
         base = os.path.join(os.path.dirname(os.path.abspath(argv[0])), "output")

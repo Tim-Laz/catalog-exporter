@@ -8,11 +8,12 @@ masks, floor plans with their backgrounds and apartment masks, unique 360 tours,
 apartment top views, amenity 360 photos, and an apartments table that ties it all
 together.
 
-    python3 export.py "<catalog link>"                      # everything -> output/<project>/
-    python3 export.py "<catalog link>" --only floors,tours  # just some parts
+    py export.py "<catalog link>"                      # Windows (python3 on macOS)
+    py export.py "<catalog link>" --only floors,tours  # just some parts
 
-Needs Python 3 and (for image work) ImageMagick + librsvg:
-    brew install imagemagick librsvg
+Needs Python 3.8+ and ImageMagick 7 (the `magick` command):
+    Windows:  winget install -e --id ImageMagick.ImageMagick
+    macOS:    brew install imagemagick
 
 It only READS the catalog's public API and the files that API points to.
 Re-running is safe: files already downloaded are kept.
@@ -21,7 +22,7 @@ Re-running is safe: files already downloaded are kept.
 import argparse, os, shutil, sys, time
 
 from catalog_export import steps, verify
-from catalog_export.core import Api, NetworkError, Report, configure, log, require_tools
+from catalog_export.core import Api, NetworkError, Report, configure, log, require_tools, setup_console
 
 PARTS = ["area", "buildings", "floors", "tours", "topviews", "amenities", "map"]
 DEFAULT_PARTS = [p for p in PARTS if p != "map"]
@@ -64,6 +65,7 @@ the tour and top view follow the layout, so a wrong layout means a wrong tour an
 
 
 def main():
+    setup_console()
     ap = argparse.ArgumentParser(description="Export everything an online 3D property catalog shows.")
     ap.add_argument("link", nargs="?",
                     help="link to the catalog, e.g. https://view.<domain>/<org>/projectscene/<project>/...")
@@ -122,7 +124,7 @@ def main():
     steps.step_table(ctx)
 
     date = time.strftime("%Y-%m-%d %H:%M")
-    with open(os.path.join(ctx.out, "README.md"), "w") as f:
+    with open(os.path.join(ctx.out, "README.md"), "w", encoding="utf-8") as f:
         f.write(OUTPUT_README.format(project=ctx.project_name, date=date))
     checks = None
     if set(DEFAULT_PARTS) <= set(parts):
@@ -136,12 +138,15 @@ def main():
                  f"{date}, части: {', '.join(parts)}. Org `{args.org}`, project `{args.project}`.")
 
     log("\n" + "=" * 64)
-    log(f"Done in {time.time() - started:.0f}s -> {ctx.out}")
-    log(f"Data problems found: {len(report.issues)} (see {report_name})")
+    log(f"Done in {time.time() - started:.0f}s")
+    log(f"Result: {ctx.out}")
     if checks:
         log(f"Checks: {len(checks.results) - len(checks.failed)}/{len(checks.results)} passed")
         for g, name, _, detail in checks.failed:
             log(f"  FAIL [{g}] {name} — {detail}")
+    log(f"Notes about the catalog data: {len(report.issues)} (saved in {report_name}, nothing to do)")
+    if checks:
+        log("Next: compress the Result folder and send it to us (README, last step).")
     log("=" * 64)
 
 

@@ -4,21 +4,18 @@ Every mask we write is one `<path id="...">` per zone in the pixel space of its
 render (viewBox = render size), so it overlays its render 1:1.
 """
 
-import base64, html, os, re, subprocess, tempfile
+import html, os, re, subprocess, tempfile
 
-from .core import magick
 
 SHAPE_RE = re.compile(r"<(path|polygon|polyline|rect)\b([^>]*?)/?>", re.S)
 ATTR_RE = re.compile(r'([\w:-]+)\s*=\s*"([^"]*)"', re.S)
 
-PREVIEW_STYLE = """
-  .zone { fill: #2f80ed; fill-opacity: .35; stroke: #0b3e86; stroke-width: 2;
-          vector-effect: non-scaling-stroke; }
-  .zone.alt { fill: #eb5757; stroke: #8c1f1f; }
-  .label { font: 700 %(fs)dpx Helvetica, Arial, sans-serif; fill: #fff;
-           stroke: #000; stroke-width: %(sw)spx; paint-order: stroke; text-anchor: middle;
-           dominant-baseline: middle; }
-"""
+ZONE_COLORS = [("rgba(47,128,237,0.35)", "#0b3e86"), ("rgba(235,87,87,0.35)", "#8c1f1f")]
+FONT_CANDIDATES = [
+    r"C:\Windows\Fonts\arialbd.ttf", r"C:\Windows\Fonts\arial.ttf",
+    "/System/Library/Fonts/Supplemental/Arial Bold.ttf", "/System/Library/Fonts/Supplemental/Arial.ttf",
+    "/Library/Fonts/Arial.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+]
 
 
 def _attrs(s):
@@ -135,34 +132,52 @@ def write_mask(path, width, height, zones, note=""):
     ]
     lines += [f'  <path id="{html.escape(zid)}" d="{d}"/>' for zid, d in zones]
     lines.append("</svg>")
-    with open(path, "w") as f:
+    with open(path, "w", encoding="utf-8") as f:
         f.write("\n".join(l for l in lines if l) + "\n")
 
 
+def _label_font():
+    return next((f for f in FONT_CANDIDATES if os.path.exists(f)), None)
+
+
+def _mvg_text(t):
+    return str(t).replace("\\", "\\\\").replace("'", "\\'")
+
+
 def render_preview(image_path, width, height, zones, out_jpg, labels=None, max_width=1920):
-    """Render the mask over its render so alignment can be checked by eye.
-    labels = [(text, x, y), ...]; defaults to each zone id at the centre of its shape."""
-    with open(image_path, "rb") as f:
-        b64 = base64.b64encode(f.read()).decode()
-    mime = "image/png" if image_path.lower().endswith(".png") else "image/jpeg"
+    """Draw the mask over its render so alignment can be checked by eye.
+    labels = [(text, x, y), ...]; defaults to each zone id at the centre of its shape.
+    Drawn by ImageMagick from an MVG file (a command line would be too long on Windows)."""
+    k = max(1.0, width / 1920)                   # the preview is scaled to 1920 wide
     fs = max(14, round(width / 110))
-    body = [f'<image href="data:{mime};base64,{b64}" width="{width}" height="{height}"/>']
-    for i, (zid, d) in enumerate(zones):
-        body.append(f'<path class="zone{" alt" if i % 2 else ""}" d="{d}"/>')
+    mvg = [f"stroke-width {2 * k:.1f}", "stroke-linejoin round"]
+    for i, (_, d) in enumerate(zones):
+        fill, stroke = ZONE_COLORS[i % 2]
+        mvg += [f"fill '{fill}'", f"stroke '{stroke}'", f"path '{d}'"]
     if labels is None:
         labels = [(zid, *c) for zid, d in zones if (c := path_center(d))]
+    font = _label_font()
+    text = [f"font '{font.replace(chr(92), '/')}'"] if font else []
+    text += [f"font-size {fs}", "text-anchor middle"]
     for t, x, y in labels:
         lines = str(t).split("\n")
-        top = y - (len(lines) - 1) * fs * 0.6
-        spans = "".join(f'<tspan x="{x:.0f}" y="{top + n * fs * 1.2:.0f}">{html.escape(l)}</tspan>'
-                        for n, l in enumerate(lines))
-        body.append(f'<text class="label">{spans}</text>')
-    svg = (f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" '
-           f'viewBox="0 0 {width} {height}"><style>{PREVIEW_STYLE % {"fs": fs, "sw": fs / 5}}</style>'
-           + "".join(body) + "</svg>")
+        top = y - (len(lines) - 1) * fs * 0.6 + fs * 0.35
+        for n, line in enumerate(lines):
+            ty = top + n * fs * 1.2
+            # a dark outline first, then the white text on top of it
+            text += ["fill black", "stroke black", f"stroke-width {fs / 5:.1f}",
+                     f"text {x:.0f},{ty:.0f} '{_mvg_text(line)}'",
+                     "fill white", "stroke none", f"text {x:.0f},{ty:.0f} '{_mvg_text(line)}'"]
     with tempfile.TemporaryDirectory() as tmp:
-        src, png = os.path.join(tmp, "p.svg"), os.path.join(tmp, "p.png")
-        with open(src, "w") as f:
-            f.write(svg)
-        subprocess.check_call(["rsvg-convert", "-o", png, src], stderr=subprocess.DEVNULL)
-        magick(png, "-resize", f"{max_width}x>", "-quality", "85", out_jpg)
+        with open(os.path.join(tmp, "zones.mvg"), "w", encoding="utf-8") as f:
+            f.write("\n".join(mvg) + "\n")
+        with open(os.path.join(tmp, "labels.mvg"), "w", encoding="utf-8") as f:
+            f.write("\n".join(text) + "\n")
+        base = [os.path.abspath(image_path), "-draw", "@zones.mvg"]
+        tail = ["-resize", f"{max_width}x>", "-quality", "85", os.path.abspath(out_jpg)]
+        try:
+            subprocess.check_call(["magick", *base, "-draw", "@labels.mvg", *tail],
+                                  cwd=tmp, stderr=subprocess.DEVNULL)
+        except subprocess.CalledProcessError:
+            # no usable font for the labels — the outlines alone still show the alignment
+            subprocess.check_call(["magick", *base, *tail], cwd=tmp, stderr=subprocess.DEVNULL)

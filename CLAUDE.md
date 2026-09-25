@@ -10,7 +10,9 @@ catalog is given by its viewer link, and every host is derived from that link.
 - **Changing the code:** read [docs/TECHNICAL.md](docs/TECHNICAL.md) first. It holds
   the verified data model, the output conventions, the checks and the robustness
   rules to keep.
-- **After a change**, run a full export and make sure `verify.py` passes.
+- **After a change**, run a full export and make sure `verify.py` passes on **both
+  Windows and macOS**. The client runs Windows. On macOS, running with
+  `LC_ALL=C PYTHONCOERCECLOCALE=0 python3 -X utf8=0` mimics Windows' non-UTF-8 defaults.
 - **Data problems:** the steps report problems in the catalog's own data. Don't "fix"
   them silently in the output; report them.
 - **Keep the repo generic:** no provider names, client names, hosts or project ids in

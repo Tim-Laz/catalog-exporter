@@ -5,6 +5,8 @@ the [README](../README.md).
 
 ## Commands
 
+`python3` on macOS, `py` (or `python`) on Windows:
+
 ```bash
 python3 export.py "<link>"                       # everything -> output/<project>/  (~5–10 min, ~0.5 GB)
 python3 export.py "<link>" --only floors,tours   # just some parts (writes REPORT_partial.md)
@@ -26,9 +28,15 @@ it, and no host or project id is hard-coded.
 
 Requirements:
 
-- macOS, Python 3.8+ (standard library only).
-- `magick` (ImageMagick 7) and `rsvg-convert` (librsvg).
-- Optionally `swiftc` (Xcode command line tools) for the printed-layout check.
+- Windows 10/11 or macOS, Python 3.8+ (standard library only).
+- `magick` (ImageMagick 7), which does all image work, including the previews (drawn
+  from MVG files).
+- Optional, for the printed-layout check:
+  - macOS: Vision, compiled once with `swiftc` from the Xcode command line tools
+  - Windows: `Windows.Media.Ocr` through Windows PowerShell 5.1, which needs an OCR
+    language installed (English is standard)
+
+  Without either, the check is skipped and noted in the report.
 
 ## Output
 
@@ -75,8 +83,8 @@ Conventions:
   - images decode and match their extension, no leftover `.part` files
 - **File names** match the top-view pattern, with slugs free of `_` and upper case.
 - **Printed layout vs catalog layout.** `ocr.py` reads "N BHK" on each floor plan with
-  macOS Vision and compares it with the catalog's layout. The check is skipped without
-  `swiftc`.
+  the OS's own OCR and compares it with the catalog's layout. Look-alike Cyrillic letters
+  are normalised. The check is skipped when no OCR is available.
 
 The steps also report problems in the catalog's own data:
 
@@ -93,8 +101,8 @@ The steps also report problems in the catalog's own data:
 | `catalog_export/core.py` | HTTP with retry/resume, curl fallback, `Api`, Firebase → CDN URLs, ImageMagick helpers, `Report` |
 | `catalog_export/steps.py` | `Ctx.load()` (API + scene roles), `floor_mapping()`, one `step_*` per output folder |
 | `catalog_export/images.py` | Deep Zoom stitching, tour tile stitching, plan cut-out, duplicate detection |
-| `catalog_export/svg.py` | reading the catalog's SVG layers, writing masks, path geometry, previews |
-| `catalog_export/ocr.py`, `ocr.swift` | printed-type reading, compiled once into `.cache/` |
+| `catalog_export/svg.py` | reading the catalog's SVG layers, writing masks, path geometry, previews (ImageMagick + MVG) |
+| `catalog_export/ocr.py` | printed-type reading, dispatching to `ocr.swift` (macOS, compiled once into `.cache/`) or `ocr_windows.ps1` (Windows) |
 | `catalog_export/verify.py` | the checks |
 
 ## Catalog API (verified)
@@ -135,8 +143,19 @@ How the endpoints connect:
 
 ## Robustness (keep when changing code)
 
-- **Downloads** go to `.part`, are checked to decode, then renamed. A cached image that
-  does not decode is fetched again.
+- **Downloads** go to `.part`, are checked, then renamed. `looks_valid` checks the header
+  and the JPEG/PNG end marker, or the WebP RIFF size, without starting a process per
+  file (slow on Windows). A cached image that fails the check is fetched again.
+- **Truncated files:** a truncated image only produces an ImageMagick *warning*, so
+  `decodes()` checks the warning text too.
+- **Portability:**
+  - every text file is read and written as UTF-8 explicitly (Windows defaults to cp1252)
+  - the console is reconfigured so it never crashes on a character it can't show
+  - long ImageMagick drawing commands go through `-draw @file.mvg`, because Windows
+    caps the command line at 32k characters
+- **Console output:** the notes about the catalog data are written only to REPORT.md.
+  The console shows their count, so the person running the tool doesn't see
+  internal notes.
 - **Stitched files** are written in a temp dir and moved into place.
 - **Tour upgrades** are decided by the file's actual width, so an interrupted rebuild
   is redone.
