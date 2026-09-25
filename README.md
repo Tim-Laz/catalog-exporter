@@ -109,7 +109,7 @@ it stopped and keeps everything already downloaded. See also
 
 ---
 
-## Step 4 — Send us the result (Google Drive)
+## Step 4 — Send us the result
 
 1. In the folder with `export.py`, open **`output`**. Inside is one folder named
    after your project.
@@ -118,11 +118,9 @@ it stopped and keeps everything already downloaded. See also
    - Windows 10: choose **Send to → Compressed (zipped) folder**.
 
    You get a `.zip` file of about 0.5 GB.
-3. Open [drive.google.com](https://drive.google.com), click **New → File upload** and
-   choose that `.zip` file. Wait until the upload completes.
-4. Right-click the uploaded file, choose **Share**, and add the email address we gave
-   you. Or set **General access** to *Anyone with the link* and click **Copy link**.
-5. Send us the link.
+3. Upload the `.zip` to Google Drive or a similar file-sharing service, and make sure
+   the link can be opened by anyone who has it.
+4. Email us the link.
 
 That's all. Thank you!
 
@@ -158,8 +156,8 @@ To start over from scratch, run `py export.py --fresh`.
    cd ~/Downloads/catalog-exporter-main
    python3 export.py
    ```
-5. Compress the folder in `output` (right-click → **Compress**) and share it as in
-   step 4.
+5. Compress the folder in `output` (right-click → **Compress**), then upload and send
+   the link as in step 4.
 
 ---
 
