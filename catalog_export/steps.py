@@ -3,7 +3,7 @@
 import csv, json, os, re
 
 from . import core, images, ocr, svg
-from .core import (cdn_url, decodes, slugify, download, get_text, image_size, items, kebab, log, natural_key,
+from .core import (Progress, cdn_url, decodes, slugify, download, get_text, image_size, items, kebab, log, natural_key,
                    to_webp, unwrap, url_ext)
 
 
@@ -122,8 +122,7 @@ def export_dzi_scene(ctx, scene, folder, name, zones_from_layers, section, mask_
     render = os.path.join(folder, f"{name}.jpg")
     dzi = cdn_url(scene["background"]["high_resolution"])
     if not os.path.exists(render) or not decodes(render):
-        w, h, n = images.stitch_dzi(dzi, render)
-        log(f"   render {w}×{h} stitched from {n} tiles")
+        images.stitch_dzi(dzi, render, f"{name} render")
     w, h = image_size(render)
 
     zones, labels = [], []
@@ -154,7 +153,7 @@ def step_area(ctx):
     if not s:
         ctx.report.issue("Area", "сцена выбора башни не найдена")
         return
-    log(f"== Area: scene '{s['name']}'")
+    log("== Area")
     zones = []
     for l in ctx.layers(s):
         bid = ctx.tower_of_scene.get(l.get("scene_id"))
@@ -166,7 +165,7 @@ def step_area(ctx):
 def step_buildings(ctx):
     for bid, s in sorted(ctx.building_scene.items(), key=lambda kv: ctx.bslug(kv[0])):
         b = ctx.buildings[bid]
-        log(f"== Building {b['name']}: scene '{s['name']}'")
+        log(f"== Building {b['name']}")
         floor_layers = sorted(((str(l["floor_id"]), l) for l in ctx.layers(s)
                                if l.get("type") == "floor" and l.get("building_id") == bid),
                               key=lambda x: natural_key(x[0]))
@@ -238,12 +237,18 @@ def polygon_area(d):
 
 
 def step_floors(ctx, mapping):
+    log("== Floors")
+    with Progress("downloading", len(mapping), "floor plans") as progress:
+        groups_out = _floor_downloads(ctx, mapping, progress)
+    _floor_outputs(ctx, groups_out)
+
+
+def _floor_downloads(ctx, mapping, progress):
     groups_out = []
     for m in mapping:
         s, b, floors = m["scene"], m["building"], m["floors"]
         folder_name = "floors-" + "-".join(f.zfill(2) for f in floors)
         folder = os.path.join(ctx.out, "03_floors", b["slug"], folder_name)
-        log(f"== Floors {b['name']} {', '.join(floors)}: scene '{s['name']}'")
         bg_url = s["background"]["high_resolution"]
         background = download(bg_url, os.path.join(folder, f"background.{url_ext(bg_url)}"))
         w, h = image_size(background)
@@ -277,7 +282,11 @@ def step_floors(ctx, mapping):
             # area normalised to a 1920-wide frame so all scenes compare
             info[pos] = {"plans": plans, "area": polygon_area(d) * (1920 / w) ** 2, "units": flats}
         groups_out.append((m, folder, folder_name, background, w, h, zones, info))
+        progress.advance()
+    return groups_out
 
+
+def _floor_outputs(ctx, groups_out):
     # A layout mismatch shows up as a contour much bigger/smaller than others of its API type
     by_type = {}
     for *_, info in groups_out:
@@ -294,6 +303,7 @@ def step_floors(ctx, mapping):
                                   "плане, не сверен с источником; осталась только сверка по площади")
     ctx.unit_printed, ctx.unit_layout_check = {}, {}
 
+    progress = Progress("plans, masks" + (", text check" if use_ocr else ""), len(groups_out), "floor plans")
     for m, folder, folder_name, background, w, h, zones, info in groups_out:
         b, floors = m["building"], m["floors"]
         mask = os.path.join(folder, "mask.svg")
@@ -386,6 +396,8 @@ def step_floors(ctx, mapping):
             images.copy(mask, sp)
         ctx.report.add("Этажи", f"- `{rel(ctx, folder)}/` — этажи {', '.join(floors)}: подложка {w}×{h}, "
                                 f"план {bbox}, {len(zones)} контуров")
+        progress.advance()
+    progress.close()
 
 
 # --------------------------------------------------------------------------- #
@@ -407,11 +419,12 @@ def step_tours(ctx):
             users.setdefault(t["_id"], []).append(u)
     root = os.path.join(ctx.out, "04_tours")
     rows = []
+    log("== Tours")
     for tid, t in sorted(ctx.tours.items(), key=lambda kv: natural_key(kv[1].get("name"))):
         tname = tour_folder_name(t)
         folder = os.path.join(root, tname)
         scenes = sorted(items(t.get("images", [])), key=lambda i: i.get("order", 0))
-        log(f"== Tour {tname}: {len(scenes)} scenes, {len(users.get(tid, []))} apartments")
+        progress = Progress(f"{tname} ({len(users.get(tid, []))} apartments)", len(scenes), "panoramas")
         out_scenes, id2file = [], {}
         for i, im in enumerate(scenes, 1):
             sid = im.get("id") or im.get("_id")
@@ -446,6 +459,8 @@ def step_tours(ctx):
                                "initial_view_raw": im.get("rotation"), "hotspots": links, "note": note})
             if note:
                 ctx.report.add("Туры", f"- `{rel(ctx, path)}` — {note}")
+            progress.advance()
+        progress.close()
         apts = users.get(tid, [])
         with open(os.path.join(folder, "tour.json"), "w", encoding="utf-8") as f:
             json.dump({"tour": tname, "source_tour_id": tid, "scenes": out_scenes,
@@ -512,7 +527,9 @@ def step_topviews(ctx):
     log("== Top views")
     prefix = lambda b: topview_prefix(ctx, b)  # noqa: E731
     made = {}
+    progress = Progress("top views", len(ctx.units), "apartments")
     for u in ctx.units:
+        progress.advance()
         plan = ctx.unitplans.get(u.get("unitplan_id")) or {}
         imgs = plan_images(ctx, plan)
         if not imgs:
@@ -538,6 +555,7 @@ def step_topviews(ctx):
                 images.copy(by_cfg, dest)
             else:
                 to_webp(src, dest, max_side=2560)
+    progress.close()
     for path, src in sorted(made.items()):
         ctx.report.add("Топ-вью", f"- `{rel(ctx, path)}` — {size_str(path)} (исходник {size_str(src)})")
 
@@ -553,6 +571,7 @@ def step_amenities(ctx):
     for a in sorted(ctx.amenities, key=lambda a: (a.get("category") or "", a.get("order") or 0)):
         by_cat.setdefault(a.get("category") or "other", []).append(a)
     folders = {}
+    progress = Progress("360 photos", sum(len(g) for g in by_cat.values()), "amenities")
     for cat, group in by_cat.items():
         folder = kebab(cat)
         if folder in folders.values():               # two categories that slug the same
@@ -561,17 +580,21 @@ def step_amenities(ctx):
         for i, a in enumerate(group, 1):
             if not a.get("file"):
                 ctx.report.issue("Amenities", f"«{a.get('name')}» ({cat}): в источнике нет файла")
+                progress.advance()
                 continue
             path = os.path.join(root, folder, f"{i:02d}_{kebab(a.get('name'))}.{url_ext(a['file'])}")
             download(a["file"], path)
             entries.append((cat, a, path, image_size(path)))
+            progress.advance()
+    progress.close()
 
     odd = [f"{rel(ctx, p)} ({wh[0]}×{wh[1]})" for _, _, p, wh in entries if wh and wh[0] != 2 * wh[1]]
     if odd:
         ctx.report.issue("Amenities", f"{len(odd)} из {len(entries)} панорам не 2:1 (обычно 360 = 2:1), "
                                       "источник всё равно показывает их как сферу: " + "; ".join(odd))
     dup_of = {}
-    groups = images.visual_duplicates([p for _, _, p, _ in entries])
+    with Progress("looking for duplicate photos"):
+        groups = images.visual_duplicates([p for _, _, p, _ in entries])
     for group in groups:
         best = max(group, key=lambda p: (image_size(p) or (0, 0))[0])
         for p in group:
@@ -596,7 +619,7 @@ def step_amenities(ctx):
         os.makedirs(folder, exist_ok=True)
         render = os.path.join(folder, "amenities-overview.jpg")
         if not os.path.exists(render) or not decodes(render):
-            images.stitch_dzi(cdn_url(s["background"]["high_resolution"]), render)
+            images.stitch_dzi(cdn_url(s["background"]["high_resolution"]), render, "overview render")
         w, h = image_size(render)
         names = {a["_id"]: a.get("name") for a in ctx.amenities}
         pins = []
@@ -617,7 +640,7 @@ def step_map(ctx):
     s = ctx.map_scene
     if not s:
         return
-    log(f"== Map: scene '{s['name']}'")
+    log("== Map")
     folder = os.path.join(ctx.out, "00_map")
     os.makedirs(folder, exist_ok=True)
     render = os.path.join(folder, "map.jpg")

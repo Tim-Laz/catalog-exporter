@@ -1,6 +1,7 @@
 """Shared plumbing: HTTP, catalog API, CDN urls, ImageMagick, naming, the run report."""
 
 import concurrent.futures as cf
+import threading
 import json, os, re, shutil, ssl, subprocess, sys, tempfile, time, urllib.error, urllib.parse, urllib.request
 
 UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
@@ -78,6 +79,9 @@ def _windows_keep_running():
 
 
 def log(msg=""):
+    p = Progress._active
+    if p is not None and p.live:                # clear the live progress line first
+        sys.stdout.write("\r" + " " * p._width + "\r")
     print(msg, flush=True)
 
 
@@ -123,7 +127,12 @@ def _fetch(url, dest, timeout):
         try:
             req = urllib.request.Request(url, headers={"User-Agent": UA})
             with urllib.request.urlopen(req, timeout=timeout) as r:
-                shutil.copyfileobj(r, dest, 1 << 16)
+                while True:
+                    chunk = r.read(1 << 16)
+                    if not chunk:
+                        break
+                    dest.write(chunk)
+                    _count(len(chunk))
             return
         except Exception as e:  # noqa: BLE001
             if not _is_cert_error(e):
@@ -134,6 +143,7 @@ def _fetch(url, dest, timeout):
     dest.truncate()
     subprocess.run(["curl", "-sSfL", "--proto", "=https", "--max-time", str(timeout), "-A", UA, "--", url],
                    stdout=dest, check=True)
+    _count(dest.tell())
 
 
 def _retry(fn, url, tries=4):
@@ -226,13 +236,15 @@ def download(url, path):
             os.remove(path + ".part")
 
 
-def download_many(pairs):
-    """pairs = [(url, path), ...] downloaded in parallel. Ctrl+C cancels the queue
-    at once instead of waiting for every pending file."""
+def download_many(pairs, progress=None):
+    """pairs = [(url, path), ...] downloaded in parallel; each finished file advances
+    `progress`. Ctrl+C cancels the queue at once instead of waiting for every pending file."""
     ex = cf.ThreadPoolExecutor(WORKERS)
     try:
         for f in cf.as_completed([ex.submit(download, *p) for p in pairs]):
             f.result()
+            if progress:
+                progress.advance()
     except BaseException:
         # wait for the downloads already running: on Windows their open files would
         # otherwise block deleting the temp folder and hide the real error
@@ -251,6 +263,91 @@ def head_ok(url):
             return r.status == 200
     except Exception:  # noqa: BLE001
         return False
+
+
+# --------------------------------------------------------------------------- #
+# Progress: one live line per step
+# --------------------------------------------------------------------------- #
+
+_bytes = 0
+_bytes_lock = threading.Lock()
+
+
+def _count(n):
+    global _bytes
+    with _bytes_lock:
+        _bytes += n
+
+
+class Progress:
+    """One status line for a step, redrawn in place twice a second so a long download
+    visibly moves:  '   Tour 3BR  [########------------] 3/7 panoramas  41.2 MB (2.3 MB/s)  38s'.
+    When the step ends the line stays as its one-line summary. A Progress opened inside
+    another one stays silent (its bytes still show in the outer line). When the output
+    is not a console (redirected to a file) only the summary line is printed."""
+
+    _active = None
+
+    def __init__(self, label, total=None, unit=""):
+        self.label, self.total, self.unit, self.done = label, total, unit, 0
+        self.nested = Progress._active is not None
+        self.live = not self.nested and sys.stdout.isatty()
+        self._b0, self._t0, self._width = _bytes, time.time(), 0
+        self._stop = threading.Event()
+        if not self.nested:
+            Progress._active = self
+        if self.live:
+            self._thread = threading.Thread(target=self._tick, daemon=True)
+            self._thread.start()
+
+    def advance(self, n=1):
+        self.done += n
+
+    def _line(self):
+        secs = max(time.time() - self._t0, 0.001)
+        mb = (_bytes - self._b0) / 1e6
+        parts = [f"   {self.label}"]
+        if self.total:
+            filled = min(20, int(20 * self.done / self.total))
+            parts.append(f"[{'#' * filled}{'-' * (20 - filled)}] {self.done}/{self.total} {self.unit}".rstrip())
+        if mb >= 0.05:
+            parts.append(f"{mb:.1f} MB ({mb / secs:.1f} MB/s)")
+        parts.append(f"{int(secs)}s")
+        return "  ".join(parts)
+
+    def _draw(self, end=""):
+        # never wider than the window: a wrapped line can't be redrawn in place
+        line = self._line()[:max(20, shutil.get_terminal_size((100, 20)).columns - 1)]
+        sys.stdout.write("\r" + line + " " * max(0, self._width - len(line)) + end)
+        sys.stdout.flush()
+        self._width = len(line)
+
+    def _tick(self):
+        while not self._stop.wait(0.5):
+            self._draw()
+
+    @classmethod
+    def close_active(cls):
+        """End the running line cleanly before an error message is printed."""
+        if cls._active is not None:
+            cls._active.close()
+
+    def close(self):
+        if self.nested or Progress._active is not self:
+            return
+        Progress._active = None
+        self._stop.set()
+        if self.live:
+            self._thread.join()
+            self._draw("\n")
+        else:
+            log(self._line())
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
 
 
 def cdn_url(firebase_url):

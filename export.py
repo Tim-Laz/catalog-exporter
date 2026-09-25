@@ -23,7 +23,7 @@ Re-running is safe: files already downloaded are kept.
 import argparse, os, shutil, sys, time
 
 from catalog_export import steps, verify
-from catalog_export.core import (Api, NetworkError, Report, check_python, configure, log, require_tools,
+from catalog_export.core import (Api, NetworkError, Progress, Report, check_python, configure, log, require_tools,
                                  run_command, setup_console)
 
 # The catalog exported when no link is given on the command line.
@@ -131,9 +131,10 @@ def main():
         f.write(OUTPUT_README.format(project=ctx.project_name, date=date))
     checks = None
     if set(DEFAULT_PARTS) <= set(parts):
-        log("\nVerifying the export ...")
+        log("== Checks")
         try:
-            checks = verify.run(ctx.out)
+            with Progress("checking the export"):
+                checks = verify.run(ctx.out)
             report.add("Автоматические проверки", checks.markdown())
         except Exception as e:  # noqa: BLE001 — a broken check must not cost the export its report
             report.issue("Проверки", f"проверка выгрузки упала: {type(e).__name__}: {e}")
@@ -161,14 +162,17 @@ if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
+        Progress.close_active()
         log("\nStopped. Run the same command again to continue — finished files are kept.")
         sys.exit(130)
     except PermissionError as e:
+        Progress.close_active()
         log(f"\nERROR: a file is in use and cannot be written:\n  {e.filename}\n"
             "Close any file from the output folder that is open (for example apartments.csv in Excel)\n"
             "and run the same command again.")
         sys.exit(1)
     except NetworkError as e:
+        Progress.close_active()
         log(f"\nERROR: could not download from the catalog after several tries:\n  {e}\n"
             "Check the internet connection and run the same command again — finished files are kept.")
         sys.exit(1)

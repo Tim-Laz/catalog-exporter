@@ -79,7 +79,16 @@ in a new window.
 
    If `py` is not recognized, type `python export.py` instead.
 
-The run takes about **10 minutes**, and progress lines scroll by while it works.
+The run takes about **10 minutes**. Each step shows one live line: what it is
+doing, how far it got, and how many MB it has downloaded, for example
+
+```
+== Tours
+   3BR (50 apartments)  [########------------] 3/7 panoramas  28.4 MB (2.9 MB/s)  10s
+```
+
+The longest step, *plans, masks, text check*, downloads nothing for about 3 minutes.
+Its counter still moves.
 Leave the window alone meanwhile: **don't click inside it**. On some Windows versions a
 click starts a text selection that pauses the program (the window title then begins
 with *Select*). If that happens, press **Esc**.

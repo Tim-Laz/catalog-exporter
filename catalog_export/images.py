@@ -2,7 +2,7 @@
 
 import math, os, re, shutil, subprocess, tempfile
 
-from .core import download_many, get_text, head_ok, magick
+from .core import Progress, download_many, get_text, head_ok, magick
 
 # --------------------------------------------------------------------------- #
 # Deep Zoom (OpenSeadragon) renders: area, towers, amenities overview
@@ -17,7 +17,7 @@ def dzi_info(dzi_url):
             "tile": num("TileSize"), "overlap": num("Overlap"), "format": fmt}
 
 
-def stitch_dzi(dzi_url, out_path):
+def stitch_dzi(dzi_url, out_path, label="render"):
     """Rebuild the full-resolution render from the top Deep Zoom level.
     The catalog never serves the render as one file — the viewer paints tiles on a canvas."""
     info = dzi_info(dzi_url)
@@ -28,7 +28,8 @@ def stitch_dzi(dzi_url, out_path):
     with tempfile.TemporaryDirectory() as tmp:
         tiles = {(c, r): os.path.join(tmp, f"{c}_{r}.{info['format']}")
                  for c in range(cols) for r in range(rows)}
-        download_many([(f"{base}/{c}_{r}.{info['format']}", p) for (c, r), p in tiles.items()])
+        with Progress(label, len(tiles), "tiles") as progress:
+            download_many([(f"{base}/{c}_{r}.{info['format']}", p) for (c, r), p in tiles.items()], progress)
         col_files = []
         for c in range(cols):
             args = []

@@ -158,6 +158,10 @@ How the endpoints connect:
 - **Windows console:** QuickEdit is switched off while running, because a stray click
   would otherwise pause the process at its next output. System sleep is also blocked
   until the run ends. Both are restored at exit.
+- **Progress:** `core.Progress` draws one line per step, redrawn in place every 0.5 s
+  and clipped to the window width. It shows items done / total, MB downloaded (bytes
+  are counted in `_fetch`) and elapsed time. A Progress opened inside another one stays
+  silent. When stdout is not a console, only the summary line is printed.
 - **Console output:** the notes about the catalog data are written only to REPORT.md.
   The console shows their count, so the person running the tool doesn't see
   internal notes.
